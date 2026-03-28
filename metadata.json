@@ -1,0 +1,5 @@
+{
+  "name": "Web Chat Application",
+  "description": "A full-stack web chat application with Docker Compose support.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,161 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  username      String    @unique
+  passwordHash  String    @map("password_hash")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  sessions      Session[]
+  ownedRooms    Room[]    @relation("RoomOwner")
+  roomMembers   RoomMember[]
+  messages      Message[]
+  bannedFrom    BannedUser[]
+  bansIssued    BannedUser[] @relation("BannedBy")
+  friends       Friend[]  @relation("UserFriends")
+  friendOf      Friend[]  @relation("FriendUsers")
+  friendRequestsSent FriendRequest[] @relation("RequestsSent")
+  friendRequestsRecv FriendRequest[] @relation("RequestsReceived")
+  userBans      UserBan[] @relation("UserBans")
+  bannedByUsers UserBan[] @relation("BannedByUsers")
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  token        String   @unique
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  lastActivity DateTime @default(now()) @map("last_activity")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Room {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  visibility  String   // "public" or "private"
+  ownerId     String   @map("owner_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  owner       User     @relation("RoomOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members     RoomMember[]
+  bannedUsers BannedUser[]
+  messages    Message[]
+
+  @@map("rooms")
+}
+
+model RoomMember {
+  roomId   String   @map("room_id")
+  userId   String   @map("user_id")
+  role     String   // "owner", "admin", "member"
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  room     Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([roomId, userId])
+  @@map("room_members")
+}
+
+model BannedUser {
+  roomId   String   @map("room_id")
+  userId   String   @map("user_id")
+  bannedById String @map("banned_by")
+  reason   String?
+  bannedAt DateTime @default(now()) @map("banned_at")
+
+  room     Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bannedBy User     @relation("BannedBy", fields: [bannedById], references: [id], onDelete: Cascade)
+
+  @@id([roomId, userId])
+  @@map("banned_users")
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  roomId    String?  @map("room_id")
+  userId    String   @map("user_id")
+  content   String
+  parentId  String?  @map("parent_id")
+  editedAt  DateTime? @map("edited_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  room      Room?    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent    Message? @relation("Replies", fields: [parentId], references: [id])
+  replies   Message[] @relation("Replies")
+  attachments Attachment[]
+
+  @@map("messages")
+}
+
+model Attachment {
+  id        String   @id @default(uuid())
+  messageId String   @map("message_id")
+  filename  String
+  filePath  String   @map("file_path")
+  fileSize  Int      @map("file_size")
+  fileType  String   @map("file_type")
+  comment   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@map("attachments")
+}
+
+model Friend {
+  userId   String   @map("user_id")
+  friendId String   @map("friend_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user     User     @relation("UserFriends", fields: [userId], references: [id], onDelete: Cascade)
+  friend   User     @relation("FriendUsers", fields: [friendId], references: [id], onDelete: Cascade)
+
+  @@id([userId, friendId])
+  @@map("friends")
+}
+
+model FriendRequest {
+  id         String   @id @default(uuid())
+  fromUserId String   @map("from_user_id")
+  toUserId   String   @map("to_user_id")
+  message    String?
+  status     String   // "pending", "accepted", "rejected"
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  fromUser   User     @relation("RequestsSent", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser     User     @relation("RequestsReceived", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  @@map("friend_requests")
+}
+
+model UserBan {
+  userId       String   @map("user_id")
+  bannedUserId String   @map("banned_user_id")
+  bannedAt     DateTime @default(now()) @map("banned_at")
+
+  user         User     @relation("UserBans", fields: [userId], references: [id], onDelete: Cascade)
+  bannedUser   User     @relation("BannedByUsers", fields: [bannedUserId], references: [id], onDelete: Cascade)
+
+  @@id([userId, bannedUserId])
+  @@map("user_bans")
+}
