@@ -66,6 +66,3 @@ Ensure you have **Docker** and **Docker Compose** installed on your machine.
 
 -----
 
-### **Next Step**
-
-Would you like me to generate a **`.env.example`** file template so other users know exactly which environment variables they need to configure?
