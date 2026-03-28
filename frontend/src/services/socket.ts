@@ -6,7 +6,9 @@ class SocketService {
   connect(token: string) {
     if (this.socket) return;
     
-    this.socket = io('/', {
+    const API_URL = import.meta.env.VITE_API_URL || '';
+    
+    this.socket = io(API_URL || '/', {
       auth: { token }
     });
 
