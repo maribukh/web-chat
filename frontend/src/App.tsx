@@ -11,7 +11,28 @@ import ChatLayout from './components/layout/ChatLayout';
 import RoomView from './components/chat/RoomView';
 import DMRedirect from './components/chat/DMRedirect';
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 30_000,
+    },
+  },
+});
+
+function EmptyState() {
+  return (
+    <div className="empty-state">
+      <div className="empty-state-icon">
+        <MessageSquare size={40} />
+      </div>
+      <h2 className="empty-state-title">No chat selected</h2>
+      <p className="empty-state-sub">
+        Pick a room or start a direct message from the sidebar to begin chatting.
+      </p>
+    </div>
+  );
+}
 
 function App() {
   const { token, user } = useAuthStore();
@@ -23,7 +44,7 @@ function App() {
       socketService.disconnect();
     }
     return () => {
-      socketService.disconnect();
+      // Don't disconnect on every re-render — only on unmount
     };
   }, [token, user]);
 
@@ -31,13 +52,14 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={!token ? <Login /> : <Navigate to="/" />} />
-          <Route path="/register" element={!token ? <Register /> : <Navigate to="/" />} />
-          <Route path="/" element={token ? <ChatLayout /> : <Navigate to="/login" />}>
-            <Route index element={<div className="flex-1 flex flex-col items-center justify-center text-gray-400 bg-[#313338]"><div className="w-24 h-24 bg-[#2b2d31] rounded-full flex items-center justify-center mb-6"><MessageSquare className="w-12 h-12 text-gray-500" /></div><h2 className="text-xl font-bold text-gray-200 mb-2">No Room Selected</h2><p>Select a room or contact from the sidebar to start chatting</p></div>} />
+          <Route path="/login" element={!token ? <Login /> : <Navigate to="/" replace />} />
+          <Route path="/register" element={!token ? <Register /> : <Navigate to="/" replace />} />
+          <Route path="/" element={token ? <ChatLayout /> : <Navigate to="/login" replace />}>
+            <Route index element={<EmptyState />} />
             <Route path="room/:roomId" element={<RoomView />} />
             <Route path="dm/:friendId" element={<DMRedirect />} />
           </Route>
+          <Route path="*" element={<Navigate to={token ? '/' : '/login'} replace />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

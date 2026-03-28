@@ -2,46 +2,103 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import api from '../lib/api';
+import { Eye, EyeOff, MessageSquare, Loader2 } from 'lucide-react';
 
-export default function Register() {
+export default function Login() {
   const [email, setEmail] = useState('');
-  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
-  const setAuth = useAuthStore(state => state.setAuth);
+  const [loading, setLoading] = useState(false);
+  const setAuth = useAuthStore((state) => state.setAuth);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+    setLoading(true);
     try {
-      const res = await api.post('/auth/register', { email, username, password });
+      const res = await api.post('/auth/login', { email, password });
       setAuth(res.data.token, res.data.user);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Registration failed');
+      setError(err.response?.data?.error || err.message || 'Login failed. Check your credentials.');
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100">
-      <div className="bg-white p-8 rounded-lg shadow-md w-96">
-        <h2 className="text-2xl font-bold mb-6 text-center">Register</h2>
-        {error && <div className="bg-red-100 text-red-600 p-3 rounded mb-4">{error}</div>}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Email</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" required />
+    <div className="auth-page">
+      {/* Animated background */}
+      <div className="auth-bg">
+        <div className="auth-bg-orb auth-bg-orb-1" />
+        <div className="auth-bg-orb auth-bg-orb-2" />
+        <div className="auth-bg-orb auth-bg-orb-3" />
+      </div>
+
+      <div className="auth-card">
+        {/* Logo */}
+        <div className="auth-logo">
+          <div className="auth-logo-icon">
+            <MessageSquare className="w-8 h-8 text-white" />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Username</label>
-            <input type="text" value={username} onChange={e => setUsername(e.target.value)} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" required />
+          <h1 className="auth-title">Welcome Back</h1>
+          <p className="auth-subtitle">Sign in to continue chatting</p>
+        </div>
+
+        {error && (
+          <div className="auth-error">
+            <span>{error}</span>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Password</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" required />
+        )}
+
+        <form onSubmit={handleSubmit} className="auth-form">
+          <div className="auth-field">
+            <label className="auth-label">Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="auth-input"
+              placeholder="you@example.com"
+              required
+              autoComplete="email"
+            />
           </div>
-          <button type="submit" className="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700">Register</button>
+
+          <div className="auth-field">
+            <label className="auth-label">Password</label>
+            <div className="auth-input-wrapper">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="auth-input auth-input-pad"
+                placeholder="••••••••"
+                required
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="auth-eye-btn"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <button type="submit" className="auth-btn" disabled={loading}>
+            {loading ? (
+              <><Loader2 className="w-4 h-4 animate-spin mr-2" />Signing in...</>
+            ) : (
+              'Sign In'
+            )}
+          </button>
         </form>
-        <p className="mt-4 text-center text-sm">
-          Already have an account? <Link to="/login" className="text-blue-600 hover:underline">Login</Link>
+
+        <p className="auth-switch">
+          Don't have an account?{' '}
+          <Link to="/register" className="auth-link">Create one</Link>
         </p>
       </div>
     </div>

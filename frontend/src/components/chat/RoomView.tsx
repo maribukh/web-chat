@@ -1,257 +1,634 @@
 import { useParams } from 'react-router-dom';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { socketService } from '../../services/socket';
-import { Hash, Users, Bell, Pin, Search, Inbox, HelpCircle, PlusCircle, Smile, Gift, Image as ImageIcon, Sticker, Trash2 } from 'lucide-react';
+import {
+  Hash, Users, Bell, Paperclip, Smile, Send, X,
+  CornerUpLeft, Pencil, Trash2, Check, MessageSquare
+} from 'lucide-react';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
+import { useQuery } from '@tanstack/react-query';
+import EmojiPicker from '../ui/EmojiPicker';
+import RoomMemberPanel from './RoomMemberPanel';
+
+const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+
+function getAvatarColor(username: string) {
+  const colors = ['#6c63ff', '#e85d75', '#3ba55d', '#faa61a', '#5b9bd5', '#e67e22', '#9b59b6', '#1abc9c'];
+  let hash = 0;
+  for (let i = 0; i < username.length; i++) hash = username.charCodeAt(i) + ((hash << 5) - hash);
+  return colors[Math.abs(hash) % colors.length];
+}
+
+function formatTime(d?: string) {
+  if (!d) return '';
+  return new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDate(d?: string) {
+  if (!d) return 'Today';
+  const date = new Date(d);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) return 'Today';
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return date.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+function isImageFile(fileType: string) {
+  return fileType.startsWith('image/');
+}
 
 export default function RoomView() {
-  const { roomId } = useParams();
+  const { roomId } = useParams<{ roomId: string }>();
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
+  const [replyTo, setReplyTo] = useState<any | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [showMembers, setShowMembers] = useState(true);
+  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+
   const { user } = useAuthStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  // Fetch room details
+  const { data: room } = useQuery({
+    queryKey: ['roomDetails', roomId],
+    queryFn: async () => {
+      const res = await api.get(`/rooms/${roomId}`);
+      return res.data;
+    },
+    enabled: !!roomId,
+  });
+
+  // Load messages
+  const fetchMessages = useCallback(async (cursor?: string) => {
+    if (!roomId) return;
+    try {
+      const url = cursor
+        ? `/messages/room/${roomId}?cursor=${cursor}&limit=50`
+        : `/messages/room/${roomId}?limit=50`;
+      const res = await api.get(url);
+      const data: any[] = res.data;
+      if (!cursor) {
+        setMessages(data);
+        setHasMore(data.length === 50);
+      } else {
+        setMessages((prev) => [...data, ...prev]);
+        setHasMore(data.length === 50);
+      }
+    } catch (err) {
+      console.error('Failed to fetch messages:', err);
+    }
+  }, [roomId]);
 
   useEffect(() => {
     if (!roomId) return;
-    
-    const fetchMessages = async () => {
-      try {
-        const res = await api.get(`/messages/room/${roomId}`);
-        setMessages(res.data);
-      } catch (error) {
-        console.error('Failed to fetch messages:', error);
-      }
-    };
-    
+    setMessages([]);
+    setHasMore(true);
+    setReplyTo(null);
+    setEditingId(null);
     fetchMessages();
-  }, [roomId]);
+  }, [roomId, fetchMessages]);
 
+  // Socket setup
   useEffect(() => {
     const socket = socketService.getSocket();
     if (!socket || !roomId) return;
 
     socket.emit('join_room', { roomId });
 
-    const handleNewMessage = (msg: any) => {
+    const onNewMessage = (msg: any) => {
       if (msg.roomId === roomId) {
-        setMessages(prev => [...prev, msg]);
+        setMessages((prev) => [...prev, msg]);
       }
     };
 
-    socket.on('new_message', handleNewMessage);
+    const onEditedMessage = (msg: any) => {
+      if (msg.roomId === roomId) {
+        setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)));
+      }
+    };
+
+    const onDeletedMessage = ({ messageId }: { messageId: string }) => {
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+    };
+
+    const onTyping = ({ userId, username }: { userId: string; username: string }) => {
+      if (userId === user?.id) return;
+      setTypingUsers((prev) => (prev.includes(username) ? prev : [...prev, username]));
+    };
+
+    const onStopTyping = ({ username }: { username: string }) => {
+      setTypingUsers((prev) => prev.filter((u) => u !== username));
+    };
+
+    socket.on('new_message', onNewMessage);
+    socket.on('message_edited', onEditedMessage);
+    socket.on('message_deleted', onDeletedMessage);
+    socket.on('user_typing', onTyping);
+    socket.on('user_stop_typing', onStopTyping);
 
     return () => {
-      socket.off('new_message', handleNewMessage);
+      socket.off('new_message', onNewMessage);
+      socket.off('message_edited', onEditedMessage);
+      socket.off('message_deleted', onDeletedMessage);
+      socket.off('user_typing', onTyping);
+      socket.off('user_stop_typing', onStopTyping);
     };
-  }, [roomId]);
+  }, [roomId, user?.id]);
 
+  // Scroll to bottom on new messages (only if already at bottom)
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (isAtBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, isAtBottom]);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const handleScroll = () => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    setIsAtBottom(atBottom);
+
+    // Infinite scroll upward
+    if (el.scrollTop < 80 && hasMore && !loadingMore && messages.length > 0) {
+      const oldScrollHeight = el.scrollHeight;
+      setLoadingMore(true);
+      fetchMessages(messages[0]?.id).finally(() => {
+        setLoadingMore(false);
+        // Restore scroll position
+        requestAnimationFrame(() => {
+          if (el) el.scrollTop = el.scrollHeight - oldScrollHeight;
+        });
+      });
+    }
+  };
+
+  // Auto-resize textarea
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    const el = e.target;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 180) + 'px';
+
+    // Typing indicator
+    const socket = socketService.getSocket();
+    if (socket && roomId) {
+      socket.emit('typing', { roomId });
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = setTimeout(() => {
+        socket.emit('stop_typing', { roomId });
+      }, 2000);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+    if (e.key === 'Escape') {
+      setReplyTo(null);
+      setShowEmoji(false);
+    }
+  };
+
+  const sendMessage = () => {
+    if (!input.trim() || !roomId) return;
+    const socket = socketService.getSocket();
+    if (socket) {
+      socket.emit('send_message', {
+        roomId,
+        content: input.trim(),
+        parentId: replyTo?.id ?? null,
+      });
+      socket.emit('stop_typing', { roomId });
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    }
+    setInput('');
+    setReplyTo(null);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !roomId) return;
-
+    const MAX_SIZE = file.type.startsWith('image/') ? 3 * 1024 * 1024 : 20 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      alert(`File too large. Max ${file.type.startsWith('image/') ? '3MB for images' : '20MB'}.`);
+      return;
+    }
     try {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('roomId', roomId);
-      if (input) formData.append('comment', input);
-      
-      await api.post('/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
-      
+      if (input.trim()) formData.append('comment', input.trim());
+      await api.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setInput('');
-    } catch (error) {
-      console.error('File upload failed', error);
+    } catch (err) {
+      console.error('File upload failed', err);
+      alert('File upload failed');
     }
+    if (e.target) e.target.value = '';
   };
 
-  const sendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-    
-    const socket = socketService.getSocket();
-    if (socket && roomId) {
-      socket.emit('send_message', { roomId, content: input });
-      setInput('');
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = Array.from(e.clipboardData.items);
+    const fileItem = items.find((item) => item.kind === 'file');
+    if (fileItem) {
+      e.preventDefault();
+      const file = fileItem.getAsFile();
+      if (!file || !roomId) return;
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      const fakeEvent = { target: { files: dt.files, value: '' }, preventDefault: () => {} } as any;
+      handleFileUpload(fakeEvent);
     }
   };
 
   const handleDeleteMessage = async (messageId: string) => {
-    if (!confirm('Are you sure you want to delete this message?')) return;
+    if (!confirm('Delete this message?')) return;
     try {
       await api.delete(`/messages/${messageId}`);
-      setMessages(prev => prev.filter(m => m.id !== messageId));
-    } catch (error) {
-      console.error('Failed to delete message', error);
+      // Optimistic removal (socket also fires message_deleted)
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+    } catch (err) {
+      console.error('Failed to delete message', err);
     }
   };
 
-  const formatTime = (dateString?: string) => {
-    if (!dateString) return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    return new Date(dateString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const startEdit = (msg: any) => {
+    setEditingId(msg.id);
+    setEditContent(msg.content);
   };
 
+  const confirmEdit = async () => {
+    if (!editingId || !editContent.trim()) return;
+    try {
+      const res = await api.put(`/messages/${editingId}`, { content: editContent.trim() });
+      setMessages((prev) => prev.map((m) => (m.id === editingId ? { ...m, ...res.data } : m)));
+    } catch (err) {
+      console.error('Failed to edit message', err);
+    }
+    setEditingId(null);
+    setEditContent('');
+  };
+
+  const handleEmojiSelect = (emoji: string) => {
+    setInput((prev) => prev + emoji);
+    setShowEmoji(false);
+    textareaRef.current?.focus();
+  };
+
+  // Group messages by date for separators
+  const groupedMessages: Array<{ type: 'date'; label: string } | { type: 'message'; msg: any; isConsecutive: boolean }> = [];
+  let lastDate = '';
+  let lastUserId = '';
+  let lastTime = 0;
+
+  messages.forEach((msg, i) => {
+    const msgDate = formatDate(msg.createdAt);
+    if (msgDate !== lastDate) {
+      groupedMessages.push({ type: 'date', label: msgDate });
+      lastDate = msgDate;
+      lastUserId = '';
+      lastTime = 0;
+    }
+    const msgTime = new Date(msg.createdAt).getTime();
+    const isConsecutive = msg.userId === lastUserId && (msgTime - lastTime) < 5 * 60 * 1000;
+    groupedMessages.push({ type: 'message', msg, isConsecutive });
+    lastUserId = msg.userId;
+    lastTime = msgTime;
+  });
+
+  const roomName = room?.name ?? roomId;
+  const isDM = room?.visibility === 'private' && (room?.members?.length === 2);
+
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#313338] text-gray-100">
-      {/* Header */}
-      <div className="h-16 border-b border-[#1e1f22] flex items-center justify-between px-4 shadow-sm z-10 shrink-0">
-        <div className="flex items-center">
-          <Hash className="w-6 h-6 text-gray-400 mr-2" />
-          <h2 className="text-base font-bold text-white">{roomId}</h2>
-          <div className="mx-4 w-px h-6 bg-gray-600 hidden md:block"></div>
-          <p className="text-sm text-gray-400 hidden md:block">Welcome to #{roomId}!</p>
-        </div>
-        
-        <div className="flex items-center space-x-4 text-gray-300">
-          <Hash className="w-5 h-5 cursor-pointer hover:text-gray-100 hidden sm:block" />
-          <Bell className="w-5 h-5 cursor-pointer hover:text-gray-100 hidden sm:block" />
-          <Pin className="w-5 h-5 cursor-pointer hover:text-gray-100 hidden sm:block" />
-          <Users className="w-5 h-5 cursor-pointer hover:text-gray-100" />
-          
-          <div className="relative hidden md:block">
-            <input 
-              type="text" 
-              placeholder="Search" 
-              className="bg-[#1e1f22] text-sm rounded-md px-2 py-1 w-36 focus:w-48 transition-all outline-none placeholder-gray-500"
-            />
-            <Search className="w-4 h-4 absolute right-2 top-1.5 text-gray-400" />
+    <div style={{ display: 'flex', flex: 1, minWidth: 0, height: '100%' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+        {/* Header */}
+        <div className="chat-header">
+          <div className="chat-header-left">
+            {isDM ? (
+              <MessageSquare size={20} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+            ) : (
+              <Hash size={20} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+            )}
+            <h2 className="chat-header-title">{roomName}</h2>
+            {room?.description && (
+              <>
+                <div className="chat-header-divider" />
+                <p className="chat-header-subtitle">{room.description}</p>
+              </>
+            )}
           </div>
-          
-          <Inbox className="w-5 h-5 cursor-pointer hover:text-gray-100 hidden lg:block" />
-          <HelpCircle className="w-5 h-5 cursor-pointer hover:text-gray-100 hidden lg:block" />
-        </div>
-      </div>
-      
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
-        {/* Welcome message */}
-        <div className="mt-10 mb-6">
-          <div className="w-16 h-16 bg-[#404249] rounded-full flex items-center justify-center mb-4">
-            <Hash className="w-10 h-10 text-white" />
+          <div className="chat-header-actions">
+            <button
+              className={`chat-header-btn ${showMembers ? 'active' : ''}`}
+              onClick={() => setShowMembers(!showMembers)}
+              title="Toggle members"
+            >
+              <Users size={18} />
+            </button>
+            <button className="chat-header-btn" title="Notifications">
+              <Bell size={18} />
+            </button>
           </div>
-          <h1 className="text-3xl font-bold text-white mb-2">Welcome to #{roomId}!</h1>
-          <p className="text-gray-400">This is the start of the #{roomId} channel.</p>
         </div>
 
-        <div className="border-t border-gray-700/50 my-4 relative">
-          <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#313338] px-2 text-xs font-semibold text-gray-400">
-            Today
-          </span>
-        </div>
+        {/* Messages */}
+        <div
+          className="messages-area custom-scrollbar"
+          ref={messagesContainerRef}
+          onScroll={handleScroll}
+        >
+          {loadingMore && (
+            <div style={{ textAlign: 'center', padding: '12px', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+              Loading older messages...
+            </div>
+          )}
 
-        {messages.map((msg, i) => {
-          const isConsecutive = i > 0 && messages[i-1].userId === msg.userId;
-          
-          return (
-            <div key={i} className={`flex group hover:bg-[#2e3035] -mx-4 px-4 py-0.5 ${!isConsecutive ? 'mt-4' : ''}`}>
-              {!isConsecutive ? (
-                <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center text-white font-bold mr-4 shrink-0 mt-0.5 cursor-pointer hover:opacity-80">
-                  {msg.user?.username?.charAt(0).toUpperCase() || 'U'}
+          {/* Welcome banner */}
+          {!hasMore && messages.length > 0 && (
+            <div className="messages-welcome">
+              <div className="messages-welcome-icon">
+                <Hash size={32} style={{ color: 'var(--text-muted)' }} />
+              </div>
+              <h1 className="messages-welcome-title">Welcome to #{roomName}!</h1>
+              <p className="messages-welcome-sub">This is the very beginning of the #{roomName} channel.</p>
+            </div>
+          )}
+
+          {messages.length === 0 && (
+            <div className="empty-state" style={{ marginTop: '20vh' }}>
+              <div className="empty-state-icon">
+                <Hash size={36} />
+              </div>
+              <div className="empty-state-title">No messages yet</div>
+              <p className="empty-state-sub">Be the first to say something in #{roomName}!</p>
+            </div>
+          )}
+
+          {groupedMessages.map((item, idx) => {
+            if (item.type === 'date') {
+              return (
+                <div key={`date-${idx}`} className="date-separator">
+                  <div className="date-separator-line" />
+                  <span className="date-separator-label">{item.label}</span>
+                  <div className="date-separator-line" />
                 </div>
-              ) : (
-                <div className="w-10 mr-4 shrink-0 text-xs text-gray-500 opacity-0 group-hover:opacity-100 text-right pt-1 select-none">
-                  {formatTime(msg.createdAt)}
-                </div>
-              )}
-              
-              <div className="flex-1 min-w-0 relative">
-                {!isConsecutive && (
-                  <div className="flex items-baseline">
-                    <span className="font-medium text-gray-100 mr-2 hover:underline cursor-pointer">
-                      {msg.user?.username || 'Unknown'}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {formatTime(msg.createdAt)}
-                    </span>
-                  </div>
-                )}
-                <div className="text-gray-200 whitespace-pre-wrap break-words leading-relaxed pr-8">
-                  {msg.content}
-                </div>
-                {msg.attachments && msg.attachments.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-2 pr-8">
-                    {msg.attachments.map((att: any, idx: number) => (
-                      <div key={idx} className="bg-[#2b2d31] p-2 rounded-md border border-gray-700 flex items-center">
-                        <ImageIcon className="w-4 h-4 mr-2 text-gray-400" />
-                        <a href={att.filePath || att.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-400 hover:underline">
-                          {att.filename || att.name || 'Attachment'}
-                        </a>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                
-                {/* Message Actions */}
-                <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity bg-[#313338] border border-gray-700 rounded-md shadow-sm hidden group-hover:flex items-center -mt-4 mr-2 z-10">
-                  {(user?.id === msg.userId) && (
-                    <button 
-                      onClick={() => handleDeleteMessage(msg.id)}
-                      className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-[#2b2d31] rounded-md transition-colors"
-                      title="Delete message"
+              );
+            }
+
+            const { msg, isConsecutive } = item;
+            const isOwn = msg.userId === user?.id;
+            const username = msg.user?.username ?? 'Unknown';
+
+            return (
+              <div
+                key={msg.id}
+                className={`message-group ${!isConsecutive ? 'message-group-first' : ''}`}
+              >
+                {/* Avatar column */}
+                <div className="message-avatar-col">
+                  {!isConsecutive ? (
+                    <div
+                      className="avatar avatar-md"
+                      style={{ background: getAvatarColor(username), cursor: 'pointer' }}
+                      title={username}
                     >
-                      <Trash2 className="w-4 h-4" />
+                      {username.charAt(0).toUpperCase()}
+                    </div>
+                  ) : (
+                    <span className="message-timestamp-hover">{formatTime(msg.createdAt)}</span>
+                  )}
+                </div>
+
+                {/* Content */}
+                <div className="message-body">
+                  {!isConsecutive && (
+                    <div className="message-header">
+                      <span className="message-author">{username}</span>
+                      <span className="message-time">{formatTime(msg.createdAt)}</span>
+                      {msg.editedAt && <span className="message-edited">(edited)</span>}
+                    </div>
+                  )}
+
+                  {/* Reply preview */}
+                  {msg.parent && (
+                    <div className="message-reply-preview">
+                      <CornerUpLeft size={12} />
+                      <span className="message-reply-author">{msg.parent.user?.username ?? 'Unknown'}</span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {msg.parent.content?.slice(0, 80)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Message content or edit field */}
+                  {editingId === msg.id ? (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                      <textarea
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        className="input-text"
+                        style={{ background: 'var(--bg-elevated)', border: '1px solid var(--accent)', borderRadius: 8, padding: '8px 10px', flex: 1 }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); confirmEdit(); }
+                          if (e.key === 'Escape') { setEditingId(null); }
+                        }}
+                        autoFocus
+                        rows={2}
+                      />
+                      <button className="btn btn-primary" style={{ padding: '6px 10px' }} onClick={confirmEdit}>
+                        <Check size={14} />
+                      </button>
+                      <button className="btn btn-secondary" style={{ padding: '6px 10px' }} onClick={() => setEditingId(null)}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="message-content">{msg.content}</div>
+                  )}
+
+                  {/* Attachments */}
+                  {msg.attachments?.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+                      {msg.attachments.map((att: any) => {
+                        const src = att.filePath?.startsWith('http')
+                          ? att.filePath
+                          : `${API_URL}/${att.filePath}`;
+                        return isImageFile(att.fileType ?? '') ? (
+                          <img
+                            key={att.id}
+                            src={src}
+                            alt={att.filename}
+                            className="attachment-image"
+                            onClick={() => window.open(src, '_blank')}
+                          />
+                        ) : (
+                          <div key={att.id} className="attachment-file">
+                            <Paperclip size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                            <a href={src} target="_blank" rel="noopener noreferrer" className="attachment-file-name">
+                              {att.filename}
+                            </a>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Message actions */}
+                <div className="message-actions">
+                  <button
+                    className="message-action-btn"
+                    title="Reply"
+                    onClick={() => { setReplyTo(msg); textareaRef.current?.focus(); }}
+                  >
+                    <CornerUpLeft size={15} />
+                  </button>
+                  {isOwn && (
+                    <button
+                      className="message-action-btn"
+                      title="Edit"
+                      onClick={() => startEdit(msg)}
+                    >
+                      <Pencil size={15} />
+                    </button>
+                  )}
+                  {(isOwn || room?.members?.find((m: any) => m.userId === user?.id && (m.role === 'admin' || m.role === 'owner'))) && (
+                    <button
+                      className="message-action-btn danger"
+                      title="Delete"
+                      onClick={() => handleDeleteMessage(msg.id)}
+                    >
+                      <Trash2 size={15} />
                     </button>
                   )}
                 </div>
               </div>
+            );
+          })}
+
+          {/* Typing indicator */}
+          {typingUsers.length > 0 && (
+            <div className="typing-indicator">
+              <div className="typing-dots">
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+              </div>
+              <span>
+                {typingUsers.slice(0, 2).join(', ')}
+                {typingUsers.length > 2 && ` +${typingUsers.length - 2}`}
+                {typingUsers.length === 1 ? ' is typing...' : ' are typing...'}
+              </span>
             </div>
-          );
-        })}
-        <div ref={messagesEndRef} />
-      </div>
-      
-      {/* Input Area */}
-      <div className="px-4 pb-6 pt-2 shrink-0">
-        <form onSubmit={sendMessage} className="bg-[#383a40] rounded-lg flex items-center px-4 py-2.5">
-          <button type="button" className="text-gray-400 hover:text-gray-200 p-1 mr-2 shrink-0">
-            <PlusCircle className="w-6 h-6" />
-          </button>
-          
-          <input
-            type="text"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            className="flex-1 bg-transparent text-gray-100 focus:outline-none placeholder-gray-500"
-            placeholder={`Message #${roomId}`}
-          />
-          
-          <div className="flex items-center space-x-3 ml-2 shrink-0">
-            <button type="button" className="text-gray-400 hover:text-gray-200 hidden sm:block">
-              <Gift className="w-6 h-6" />
-            </button>
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              onChange={handleFileUpload} 
-              className="hidden" 
-            />
-            <button 
-              type="button" 
-              onClick={() => fileInputRef.current?.click()}
-              className="text-gray-400 hover:text-gray-200 hidden sm:block"
-            >
-              <ImageIcon className="w-6 h-6" />
-            </button>
-            <button type="button" className="text-gray-400 hover:text-gray-200 hidden sm:block">
-              <Sticker className="w-6 h-6" />
-            </button>
-            <button type="button" className="text-gray-400 hover:text-gray-200">
-              <Smile className="w-6 h-6" />
-            </button>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input area */}
+        <div className="input-area">
+          {showEmoji && (
+            <div style={{ position: 'relative', marginBottom: 8 }}>
+              <div style={{ position: 'absolute', bottom: 0, right: 0, zIndex: 50 }}>
+                <EmojiPicker onSelect={handleEmojiSelect} />
+              </div>
+            </div>
+          )}
+
+          <div className="input-bar">
+            {replyTo && (
+              <div className="input-reply-banner">
+                <span>Replying to <strong>{replyTo.user?.username}</strong>: {replyTo.content?.slice(0, 60)}{replyTo.content?.length > 60 ? '…' : ''}</span>
+                <button onClick={() => setReplyTo(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', padding: 2 }}>
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+
+            <div className="input-row">
+              <button
+                type="button"
+                className="input-attach-btn"
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach file"
+              >
+                <Paperclip size={20} />
+              </button>
+
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                className="input-text"
+                placeholder={`Message #${roomName}`}
+                rows={1}
+              />
+
+              <button
+                type="button"
+                className="input-icon-btn"
+                onClick={() => setShowEmoji(!showEmoji)}
+                title="Emoji"
+              >
+                <Smile size={20} />
+              </button>
+
+              <button
+                type="button"
+                className="input-icon-btn"
+                onClick={sendMessage}
+                title="Send (Enter)"
+                style={{ color: input.trim() ? 'var(--accent)' : 'var(--text-muted)' }}
+              >
+                <Send size={18} />
+              </button>
+            </div>
           </div>
-        </form>
+
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileUpload}
+            className="sr-only"
+            style={{ display: 'none' }}
+          />
+        </div>
       </div>
+
+      {/* Member panel */}
+      {showMembers && roomId && !isDM && (
+        <RoomMemberPanel roomId={roomId} />
+      )}
+
+      {/* Click outside emoji picker */}
+      {showEmoji && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 40 }}
+          onClick={() => setShowEmoji(false)}
+        />
+      )}
     </div>
   );
 }

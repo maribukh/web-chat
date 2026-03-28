@@ -1,96 +1,103 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { verifyToken } from '../utils/jwt';
-import bcrypt from 'bcrypt';
 
 const router = Router();
 
 const authMiddleware = (req: any, res: any, next: any) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
-  
   const decoded = verifyToken(token);
   if (!decoded) return res.status(401).json({ error: 'Invalid token' });
-  
   req.userId = decoded.userId;
   next();
 };
 
 router.use(authMiddleware);
 
-// Get user profile
+// ─── Get my profile ─────────────────────────────────────────────────────────
 router.get('/me', async (req: any, res: any) => {
-  const userId = req.userId;
   try {
     const user = await prisma.user.findUnique({
-      where: { id: userId },
+      where: { id: req.userId },
       select: { id: true, username: true, email: true, createdAt: true }
     });
     res.json(user);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch profile' });
   }
 });
 
-// Change password
-router.post('/change-password', async (req: any, res: any) => {
-  const { currentPassword, newPassword } = req.body;
-  const userId = req.userId;
-
+// ─── Search users by username ────────────────────────────────────────────────
+router.get('/search', async (req: any, res: any) => {
+  const { q } = req.query;
+  if (!q || typeof q !== 'string' || q.trim().length < 2) {
+    return res.status(400).json({ error: 'Query must be at least 2 characters' });
+  }
   try {
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!valid) return res.status(401).json({ error: 'Invalid current password' });
-
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    await prisma.user.update({
-      where: { id: userId },
-      data: { passwordHash }
+    const users = await prisma.user.findMany({
+      where: {
+        username: { contains: q.trim(), mode: 'insensitive' },
+        id: { not: req.userId }
+      },
+      select: { id: true, username: true },
+      take: 20,
     });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to change password' });
+    res.json(users);
+  } catch {
+    res.status(500).json({ error: 'Search failed' });
   }
 });
 
-// Delete account
-router.delete('/me', async (req: any, res: any) => {
+// ─── Ban a user (user-to-user) ──────────────────────────────────────────────
+router.post('/ban/:targetUserId', async (req: any, res: any) => {
+  const { targetUserId } = req.params;
   const userId = req.userId;
+
+  if (targetUserId === userId) return res.status(400).json({ error: 'Cannot ban yourself' });
+
   try {
-    await prisma.user.delete({ where: { id: userId } });
+    await prisma.userBan.upsert({
+      where: { userId_bannedUserId: { userId, bannedUserId: targetUserId } },
+      update: {},
+      create: { userId, bannedUserId: targetUserId }
+    });
+
+    // Remove friendship both ways
+    await prisma.friend.deleteMany({
+      where: { OR: [{ userId, friendId: targetUserId }, { userId: targetUserId, friendId: userId }] }
+    });
+
     res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to delete account' });
+  } catch {
+    res.status(500).json({ error: 'Failed to ban user' });
   }
 });
 
-// Get active sessions
-router.get('/sessions', async (req: any, res: any) => {
+// ─── Unban a user ────────────────────────────────────────────────────────────
+router.delete('/ban/:targetUserId', async (req: any, res: any) => {
+  const { targetUserId } = req.params;
   const userId = req.userId;
   try {
-    const sessions = await prisma.session.findMany({
-      where: { userId },
-      orderBy: { lastActivity: 'desc' }
+    await prisma.userBan.deleteMany({
+      where: { userId, bannedUserId: targetUserId }
     });
-    res.json(sessions);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch sessions' });
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to unban user' });
   }
 });
 
-// Logout specific session
-router.delete('/sessions/:id', async (req: any, res: any) => {
-  const { id } = req.params;
-  const userId = req.userId;
+// ─── Get user's ban list ─────────────────────────────────────────────────────
+router.get('/bans', async (req: any, res: any) => {
   try {
-    await prisma.session.deleteMany({
-      where: { id, userId }
+    const bans = await prisma.userBan.findMany({
+      where: { userId: req.userId },
+      include: { bannedUser: { select: { id: true, username: true } } }
     });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to logout session' });
+    res.json(bans.map((b: any) => b.bannedUser));
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch bans' });
   }
 });
 
