@@ -18,11 +18,14 @@ function getAvatarColor(username: string) {
 
 type PresenceStatus = 'online' | 'afk' | 'offline';
 
+// PRESENCE_LABEL is unused for now, so I'll comment it out or remove it
+/*
 const PRESENCE_LABEL: Record<PresenceStatus, string> = {
   online: 'Online',
   afk: 'Away',
   offline: 'Offline',
 };
+*/
 
 export default function RoomMemberPanel({ roomId }: RoomMemberPanelProps) {
   const { user } = useAuthStore();
@@ -137,7 +140,7 @@ export default function RoomMemberPanel({ roomId }: RoomMemberPanelProps) {
   );
 }
 
-async function handleMemberAction(action: string, targetUserId: string, roomId: string, myRole?: string) {
+async function handleMemberAction(action: string, targetUserId: string, roomId: string, _myRole?: string) {
   try {
     if (action === 'kick' || action === 'ban') {
       await api.post(`/rooms/${roomId}/${action}`, { targetUserId });

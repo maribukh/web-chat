@@ -1,6 +1,6 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
-import { Hash, MessageSquare, LogOut, Plus, Users, Bell, Search, Globe } from 'lucide-react';
+import { Hash, MessageSquare, LogOut, Plus, Bell, Search, Globe } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import api from '../../lib/api';

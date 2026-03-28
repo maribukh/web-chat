@@ -3,52 +3,165 @@ import { verifyToken } from '../utils/jwt';
 import { redisClient, prisma } from '../index';
 
 export const setupSockets = (io: Server) => {
+  // Authentication middleware
   io.use((socket, next) => {
-    const token = socket.handshake.auth.token;
+    const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Authentication error'));
-    
     const decoded = verifyToken(token);
     if (!decoded) return next(new Error('Authentication error'));
-    
     socket.data.userId = decoded.userId;
     next();
   });
 
   io.on('connection', async (socket: Socket) => {
     const userId = socket.data.userId;
-    console.log(`User connected: ${userId}`);
-    
-    // Mark user as online in Redis
+    console.log(`[Socket] User connected: ${userId}`);
+
+    // Join a personal room for targeted events
+    socket.join(`user:${userId}`);
+
+    // ─── Presence ───────────────────────────────────────────────────────────
     await redisClient.hSet('user:presence', userId, 'online');
     io.emit('presence_update', { userId, status: 'online' });
 
-    socket.on('join_room', async ({ roomId }) => {
-      socket.join(roomId);
-      console.log(`User ${userId} joined room ${roomId}`);
+    socket.on('set_afk', async () => {
+      await redisClient.hSet('user:presence', userId, 'afk');
+      io.emit('presence_update', { userId, status: 'afk' });
     });
 
-    socket.on('send_message', async ({ roomId, content, parentId }) => {
+    socket.on('set_active', async () => {
+      await redisClient.hSet('user:presence', userId, 'online');
+      io.emit('presence_update', { userId, status: 'online' });
+    });
+
+    // ─── Rooms ──────────────────────────────────────────────────────────────
+    socket.on('join_room', async ({ roomId }) => {
+      socket.join(roomId);
+      console.log(`[Socket] User ${userId} joined room ${roomId}`);
+    });
+
+    socket.on('leave_room', ({ roomId }) => {
+      socket.leave(roomId);
+    });
+
+    // ─── Typing indicators ───────────────────────────────────────────────────
+    socket.on('typing', async ({ roomId }) => {
       try {
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { username: true }
+        });
+        socket.to(roomId).emit('user_typing', { userId, username: user?.username ?? userId });
+      } catch { /* ignore */ }
+    });
+
+    socket.on('stop_typing', ({ roomId }) => {
+      socket.to(roomId).emit('user_stop_typing', { userId });
+    });
+
+    // ─── Send message ────────────────────────────────────────────────────────
+    socket.on('send_message', async ({ roomId, content, parentId }) => {
+      if (!content?.trim() || content.length > 3000) return;
+      if (!roomId) return;
+
+      try {
+        // Check ban
+        const ban = await prisma.bannedUser.findUnique({
+          where: { roomId_userId: { roomId, userId } }
+        });
+        if (ban) return;
+
+        // Check membership for private rooms
+        const room = await prisma.room.findUnique({ where: { id: roomId } });
+        if (!room) return;
+        if (room.visibility !== 'public') {
+          const member = await prisma.roomMember.findUnique({
+            where: { roomId_userId: { roomId, userId } }
+          });
+          if (!member) return;
+        }
+
         const message = await prisma.message.create({
           data: {
             roomId,
             userId,
-            content,
-            parentId
+            content: content.trim(),
+            parentId: parentId || null,
           },
-          include: { user: { select: { id: true, username: true } } }
+          include: {
+            user: { select: { id: true, username: true } },
+            parent: { include: { user: { select: { id: true, username: true } } } },
+            attachments: true,
+          }
         });
+
         io.to(roomId).emit('new_message', message);
       } catch (error) {
-        console.error('Error sending message:', error);
+        console.error('[Socket] Error sending message:', error);
       }
     });
 
+    // ─── Edit message (via socket for real-time) ─────────────────────────────
+    socket.on('edit_message', async ({ messageId, content }) => {
+      if (!content?.trim() || content.length > 3000) return;
+
+      try {
+        const message = await prisma.message.findUnique({ where: { id: messageId } });
+        if (!message || message.userId !== userId) return;
+
+        const updated = await prisma.message.update({
+          where: { id: messageId },
+          data: { content: content.trim(), editedAt: new Date() },
+          include: {
+            user: { select: { id: true, username: true } },
+            parent: { include: { user: { select: { id: true, username: true } } } },
+            attachments: true,
+          }
+        });
+
+        if (updated.roomId) {
+          io.to(updated.roomId).emit('message_edited', updated);
+        }
+      } catch (error) {
+        console.error('[Socket] Error editing message:', error);
+      }
+    });
+
+    // ─── Delete message (via socket for real-time) ───────────────────────────
+    socket.on('delete_message', async ({ messageId }) => {
+      try {
+        const message = await prisma.message.findUnique({
+          where: { id: messageId },
+          include: { room: { include: { members: true } } }
+        });
+        if (!message) return;
+
+        const member = message.room?.members.find((m: any) => m.userId === userId);
+        const isOwner = message.userId === userId;
+        const isAdmin = member && (member.role === 'owner' || member.role === 'admin');
+        if (!isOwner && !isAdmin) return;
+
+        const roomId = message.roomId;
+        await prisma.message.delete({ where: { id: messageId } });
+
+        if (roomId) {
+          io.to(roomId).emit('message_deleted', { messageId });
+        }
+      } catch (error) {
+        console.error('[Socket] Error deleting message:', error);
+      }
+    });
+
+    // ─── Disconnect ──────────────────────────────────────────────────────────
     socket.on('disconnect', async () => {
-      console.log(`User disconnected: ${userId}`);
-      // In a real app, check if user has other active sockets before marking offline
-      await redisClient.hSet('user:presence', userId, 'offline');
-      io.emit('presence_update', { userId, status: 'offline' });
+      console.log(`[Socket] User disconnected: ${userId}`);
+
+      // Check if user has other active sockets before marking offline
+      const userSockets = await io.in(`user:${userId}`).fetchSockets();
+      if (userSockets.length === 0) {
+        await redisClient.hSet('user:presence', userId, 'offline');
+        io.emit('presence_update', { userId, status: 'offline' });
+      }
     });
   });
 };

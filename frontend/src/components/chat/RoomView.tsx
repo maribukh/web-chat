@@ -300,7 +300,7 @@ export default function RoomView() {
   let lastUserId = '';
   let lastTime = 0;
 
-  messages.forEach((msg, i) => {
+  messages.forEach((msg) => {
     const msgDate = formatDate(msg.createdAt);
     if (msgDate !== lastDate) {
       groupedMessages.push({ type: 'date', label: msgDate });
