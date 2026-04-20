@@ -6,8 +6,10 @@ import { useState } from 'react';
 import api from '../../lib/api';
 import { usePresence } from '../../hooks/usePresence';
 import { usePresenceStore } from '../../store/presenceStore';
+import { useUIStore } from '../../store/uiStore';
 import CreateRoomModal from '../chat/CreateRoomModal';
 import AddFriendModal from '../chat/AddFriendModal';
+import SettingsModal from '../ui/SettingsModal';
 
 function getAvatarColor(username: string) {
   const colors = ['#6c63ff', '#e85d75', '#3ba55d', '#faa61a', '#5b9bd5', '#e67e22', '#9b59b6', '#1abc9c'];
@@ -21,9 +23,12 @@ export default function ChatLayout() {
   const location = useLocation();
   const queryClient = useQueryClient();
   const getStatus = usePresenceStore((s) => s.getStatus);
+  const { isSidebarOpen, setSidebarOpen } = useUIStore();
 
   // Activate AFK detection
   usePresence();
+
+  const [showSettings, setShowSettings] = useState(false);
 
   const [showCreateRoom, setShowCreateRoom] = useState(false);
   const [showAddFriend, setShowAddFriend] = useState(false);
@@ -101,8 +106,15 @@ export default function ChatLayout() {
 
   return (
     <div className="chat-root">
+      
+      {/* Mobile overlay */}
+      <div 
+        className={`mobile-overlay ${isSidebarOpen ? 'active' : ''}`} 
+        onClick={() => setSidebarOpen(false)} 
+      />
+
       {/* Sidebar */}
-      <div className="sidebar">
+      <div className={`sidebar ${isSidebarOpen ? 'sidebar-open' : ''}`}>
         {/* Header */}
         <div className="sidebar-header">
           <MessageSquare size={20} style={{ color: 'var(--accent)', flexShrink: 0 }} />
@@ -185,19 +197,25 @@ export default function ChatLayout() {
                   {roomSearch ? 'No rooms match' : 'No rooms yet'}
                 </div>
               )}
-              {filteredRooms.map((room: any) => (
-                <Link
-                  key={room.id}
-                  to={`/room/${room.id}`}
-                  className={`sidebar-item ${isActive(`/room/${room.id}`) ? 'active' : ''}`}
-                >
-                  <Hash size={16} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />
-                  <span className="sidebar-item-name">{room.name}</span>
-                  {room.visibility === 'private' && (
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>🔒</span>
-                  )}
-                </Link>
-              ))}
+              {filteredRooms.map((room: any) => {
+                const isUnread = false; // TODO: restore unread badge logic if it previously existed
+                return (
+                  <Link
+                    key={room.id}
+                    to={`/room/${room.id}`}
+                    className={`sidebar-item ${isActive(`/room/${room.id}`) ? 'active' : ''}`}
+                    onClick={() => setSidebarOpen(false)}
+                  >
+                    <Hash size={16} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />
+                    <span className="sidebar-item-name" style={{ fontWeight: 500 }}>
+                      {room.displayName || room.name}
+                    </span>
+                    {room.visibility === 'private' && (
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>🔒</span>
+                    )}
+                  </Link>
+                );
+              })}
             </div>
           </div>
 
@@ -239,8 +257,9 @@ export default function ChatLayout() {
                 return (
                   <Link
                     key={friend.id}
-                    to={`/dm/${friend.id}`}
-                    className={`sidebar-item ${isActive(`/dm/${friend.id}`) ? 'active' : ''}`}
+                    to={`/room/${friend.dmRoomId}`} 
+                    className={`sidebar-item ${isActive(`/room/${friend.dmRoomId}`) ? 'active' : ''}`}
+                    onClick={() => setSidebarOpen(false)}
                   >
                     <div className="avatar avatar-sm" style={{ background: getAvatarColor(friend.username) }}>
                       {friend.username.charAt(0).toUpperCase()}

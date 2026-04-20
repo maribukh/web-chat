@@ -1350,3 +1350,143 @@ body {
 .truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .h-full { height: 100%; }
 .w-full { width: 100%; }
+
+/* ===================== DROPDOWN MENUS ===================== */
+.dropdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.members-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dropdown-item {
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.dropdown-item:hover {
+  background: var(--bg-active);
+}
+
+.dropdown-item.danger:hover {
+  background: rgba(237, 66, 69, 0.15);
+  color: #ed4245 !important;
+}
+
+/* ===================== MOBILE RESPONSIVENESS ===================== */
+.mobile-menu-btn {
+  display: none;
+}
+
+.mobile-only-header {
+  display: none;
+}
+
+/* Base overlay logic for mobile sidebar */
+.mobile-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 45;
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  transition: opacity var(--transition);
+  pointer-events: none;
+}
+
+.mobile-overlay.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (max-width: 1024px) {
+  .mobile-menu-btn {
+    display: flex;
+  }
+  
+  .mobile-overlay {
+    display: block;
+  }
+
+  /* Make sidebar off-canvas */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: -100%;
+    z-index: 50;
+    transition: left var(--transition-slow);
+    box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
+  }
+
+  .sidebar.sidebar-open {
+    left: 0;
+  }
+
+  .chat-main {
+    width: 100%;
+    position: relative;
+  }
+  
+  .mobile-only-header {
+    display: flex !important;
+  }
+
+  /* Member panel to overlay */
+  .room-member-panel {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    right: -100%;
+    z-index: 50;
+    transition: right var(--transition-slow);
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+    background: var(--bg-secondary) !important;
+  }
+
+  .room-member-panel.panel-open {
+    right: 0;
+  }
+
+  /* Chat inputs */
+  .chat-input-wrapper {
+    margin: 10px;
+    margin-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  
+  .auth-card {
+    margin: 16px;
+    padding: 32px 24px;
+    width: calc(100% - 32px);
+  }
+
+  /* Adjust message paddings */
+  .message-group {
+    padding: 2px 10px;
+  }
+  
+  .date-separator {
+    margin: 12px 10px;
+  }
+}

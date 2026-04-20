@@ -3,7 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useAuthStore } from './store/authStore';
 import { socketService } from './services/socket';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, Menu } from 'lucide-react';
+import { useUIStore } from './store/uiStore';
 
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -21,15 +22,30 @@ const queryClient = new QueryClient({
 });
 
 function EmptyState() {
+  const { setSidebarOpen } = useUIStore();
+
   return (
-    <div className="empty-state">
-      <div className="empty-state-icon">
-        <MessageSquare size={40} />
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
+      <div className="chat-header mobile-only-header" style={{ flexShrink: 0 }}>
+        <button
+          className="chat-header-btn"
+          onClick={() => setSidebarOpen(true)}
+          style={{ marginRight: 8 }}
+        >
+          <Menu size={20} />
+        </button>
+        <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>Web Chat Hub</div>
       </div>
-      <h2 className="empty-state-title">No chat selected</h2>
-      <p className="empty-state-sub">
-        Pick a room or start a direct message from the sidebar to begin chatting.
-      </p>
+      
+      <div className="empty-state">
+        <div className="empty-state-icon">
+          <MessageSquare size={40} />
+        </div>
+        <h2 className="empty-state-title">No chat selected</h2>
+        <p className="empty-state-sub">
+          Pick a room or start a direct message from the sidebar to begin chatting.
+        </p>
+      </div>
     </div>
   );
 }

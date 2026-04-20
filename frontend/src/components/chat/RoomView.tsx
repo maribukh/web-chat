@@ -3,11 +3,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { socketService } from '../../services/socket';
 import {
   Hash, Users, Bell, Paperclip, Smile, Send, X,
-  CornerUpLeft, Pencil, Trash2, Check, MessageSquare
+  CornerUpLeft, Pencil, Trash2, Check, MessageSquare, MoreVertical, Menu
 } from 'lucide-react';
 import api from '../../lib/api';
 import { useAuthStore } from '../../store/authStore';
-import { useQuery } from '@tanstack/react-query';
+import { useUIStore } from '../../store/uiStore';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import EmojiPicker from '../ui/EmojiPicker';
 import RoomMemberPanel from './RoomMemberPanel';
 
@@ -42,14 +43,22 @@ function isImageFile(fileType: string) {
 
 export default function RoomView() {
   const { roomId } = useParams<{ roomId: string }>();
+
+  // ЗАЩИТА: Проверяем, что roomId существует и не равен строке "undefined"
+  const isValidRoom = Boolean(roomId && roomId !== 'undefined');
+
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
   const [replyTo, setReplyTo] = useState<any | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
-  const [showMembers, setShowMembers] = useState(true);
+  const [showOptions, setShowOptions] = useState(false);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const [showMembers, setShowMembers] = useState(false);
+
+  const queryClient = useQueryClient();
+  const { setSidebarOpen } = useUIStore();
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -68,12 +77,12 @@ export default function RoomView() {
       const res = await api.get(`/rooms/${roomId}`);
       return res.data;
     },
-    enabled: !!roomId,
+    enabled: isValidRoom, // Запрашиваем только если ID валидный
   });
 
   // Load messages
   const fetchMessages = useCallback(async (cursor?: string) => {
-    if (!roomId) return;
+    if (!isValidRoom) return;
     try {
       const url = cursor
         ? `/messages/room/${roomId}?cursor=${cursor}&limit=50`
@@ -90,21 +99,21 @@ export default function RoomView() {
     } catch (err) {
       console.error('Failed to fetch messages:', err);
     }
-  }, [roomId]);
+  }, [roomId, isValidRoom]);
 
   useEffect(() => {
-    if (!roomId) return;
+    if (!isValidRoom) return;
     setMessages([]);
     setHasMore(true);
     setReplyTo(null);
     setEditingId(null);
     fetchMessages();
-  }, [roomId, fetchMessages]);
+  }, [roomId, isValidRoom, fetchMessages]);
 
   // Socket setup
   useEffect(() => {
     const socket = socketService.getSocket();
-    if (!socket || !roomId) return;
+    if (!socket || !isValidRoom) return;
 
     socket.emit('join_room', { roomId });
 
@@ -146,9 +155,9 @@ export default function RoomView() {
       socket.off('user_typing', onTyping);
       socket.off('user_stop_typing', onStopTyping);
     };
-  }, [roomId, user?.id]);
+  }, [roomId, isValidRoom, user?.id]);
 
-  // Scroll to bottom on new messages (only if already at bottom)
+  // Scroll to bottom on new messages
   useEffect(() => {
     if (isAtBottom) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -167,7 +176,6 @@ export default function RoomView() {
       setLoadingMore(true);
       fetchMessages(messages[0]?.id).finally(() => {
         setLoadingMore(false);
-        // Restore scroll position
         requestAnimationFrame(() => {
           if (el) el.scrollTop = el.scrollHeight - oldScrollHeight;
         });
@@ -175,16 +183,14 @@ export default function RoomView() {
     }
   };
 
-  // Auto-resize textarea
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
     const el = e.target;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 180) + 'px';
 
-    // Typing indicator
     const socket = socketService.getSocket();
-    if (socket && roomId) {
+    if (socket && isValidRoom) {
       socket.emit('typing', { roomId });
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       typingTimerRef.current = setTimeout(() => {
@@ -205,7 +211,7 @@ export default function RoomView() {
   };
 
   const sendMessage = () => {
-    if (!input.trim() || !roomId) return;
+    if (!input.trim() || !isValidRoom) return;
     const socket = socketService.getSocket();
     if (socket) {
       socket.emit('send_message', {
@@ -226,7 +232,7 @@ export default function RoomView() {
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !roomId) return;
+    if (!file || !isValidRoom) return;
     const MAX_SIZE = file.type.startsWith('image/') ? 3 * 1024 * 1024 : 20 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
       alert(`File too large. Max ${file.type.startsWith('image/') ? '3MB for images' : '20MB'}.`);
@@ -235,7 +241,7 @@ export default function RoomView() {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('roomId', roomId);
+      formData.append('roomId', roomId as string);
       if (input.trim()) formData.append('comment', input.trim());
       await api.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setInput('');
@@ -252,10 +258,10 @@ export default function RoomView() {
     if (fileItem) {
       e.preventDefault();
       const file = fileItem.getAsFile();
-      if (!file || !roomId) return;
+      if (!file || !isValidRoom) return;
       const dt = new DataTransfer();
       dt.items.add(file);
-      const fakeEvent = { target: { files: dt.files, value: '' }, preventDefault: () => {} } as any;
+      const fakeEvent = { target: { files: dt.files, value: '' }, preventDefault: () => { } } as any;
       handleFileUpload(fakeEvent);
     }
   };
@@ -264,7 +270,6 @@ export default function RoomView() {
     if (!confirm('Delete this message?')) return;
     try {
       await api.delete(`/messages/${messageId}`);
-      // Optimistic removal (socket also fires message_deleted)
       setMessages((prev) => prev.filter((m) => m.id !== messageId));
     } catch (err) {
       console.error('Failed to delete message', err);
@@ -294,6 +299,19 @@ export default function RoomView() {
     textareaRef.current?.focus();
   };
 
+  // Если URL кривой (например /room/undefined), показываем заглушку
+  if (!isValidRoom) {
+    return (
+      <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <Hash size={48} style={{ opacity: 0.2, marginBottom: 16, margin: '0 auto' }} />
+          <h3>Select a room</h3>
+          <p>Choose a channel or direct message from the sidebar to start chatting.</p>
+        </div>
+      </div>
+    );
+  }
+
   // Group messages by date for separators
   const groupedMessages: Array<{ type: 'date'; label: string } | { type: 'message'; msg: any; isConsecutive: boolean }> = [];
   let lastDate = '';
@@ -315,8 +333,12 @@ export default function RoomView() {
     lastTime = msgTime;
   });
 
-  const roomName = room?.name ?? roomId;
-  const isDM = room?.visibility === 'private' && (room?.members?.length === 2);
+  const isDM = room?.visibility === 'private' && room?.members?.length === 2 && room?.name?.startsWith('dm-');
+  let roomName = room?.name ?? roomId;
+  if (isDM) {
+    const friend = room.members.find((m: any) => m.userId !== user?.id)?.user;
+    if (friend) roomName = friend.username;
+  }
 
   return (
     <div style={{ display: 'flex', flex: 1, minWidth: 0, height: '100%' }}>
@@ -324,6 +346,9 @@ export default function RoomView() {
         {/* Header */}
         <div className="chat-header">
           <div className="chat-header-left">
+            <button className="chat-header-btn mobile-menu-btn" onClick={() => setSidebarOpen(true)}>
+              <Menu size={20} />
+            </button>
             {isDM ? (
               <MessageSquare size={20} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
             ) : (
@@ -470,9 +495,11 @@ export default function RoomView() {
                   {msg.attachments?.length > 0 && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
                       {msg.attachments.map((att: any) => {
+                        const token = useAuthStore.getState().token;
+                        const tokenQuery = token ? `?token=${token}` : '';
                         const src = att.filePath?.startsWith('http')
                           ? att.filePath
-                          : `${API_URL}/${att.filePath}`;
+                          : `${API_URL}/api/upload/downloads/${att.id}${tokenQuery}`;
                         return isImageFile(att.fileType ?? '') ? (
                           <img
                             key={att.id}
